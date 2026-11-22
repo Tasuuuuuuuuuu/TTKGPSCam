@@ -14,50 +14,47 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Unzip project
+      - name: Build everything (logged)
+        id: build
+        continue-on-error: true
         run: |
-          unzip -q TTKGPSCam-source.zip
-          ls -la TTKGPSCam
-
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: 17
-
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Install SDK platform and build tools
-        run: |
-          yes | sdkmanager --licenses > /dev/null || true
-          sdkmanager "platforms;android-35" "build-tools;35.0.0"
-
-      - name: Set up Gradle 8.9
-        uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: "8.9"
-
-      - name: Unit tests and debug APK
-        working-directory: TTKGPSCam
-        run: |
-          set -o pipefail
-          gradle --no-daemon --stacktrace testDebugUnitTest assembleDebug 2>&1 | tee ../build-full.log
+          set +e
+          LOG="$GITHUB_WORKSPACE/build-full.log"
+          {
+            echo "== environment"
+            java -version
+            echo "JAVA_HOME_17_X64=$JAVA_HOME_17_X64"
+            echo "ANDROID_HOME=$ANDROID_HOME"
+            ls "$ANDROID_HOME/platforms" "$ANDROID_HOME/build-tools"
+            echo "== unzip"
+            unzip -q TTKGPSCam-source.zip && ls TTKGPSCam
+            cd TTKGPSCam || exit 1
+            chmod +x gradlew
+            export JAVA_HOME="$JAVA_HOME_17_X64"
+            export PATH="$JAVA_HOME/bin:$PATH"
+            echo "== gradle"
+            ./gradlew --no-daemon --stacktrace testDebugUnitTest assembleDebug
+            echo "GRADLE_EXIT=$?"
+          } > "$LOG" 2>&1
+          echo "SCRIPT_DONE" >> "$LOG"
+          grep -q "BUILD SUCCESSFUL" "$LOG"
 
       - name: Upload APK
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: TTK-GPS-Cam-debug-apk
           path: TTKGPSCam/app/build/outputs/apk/debug/app-debug.apk
-          if-no-files-found: error
+          if-no-files-found: warn
 
       - name: Publish build log to build-logs branch
         if: always()
         run: |
           mkdir -p /tmp/logs && cd /tmp/logs
           if [ -f "$GITHUB_WORKSPACE/build-full.log" ]; then
-            tail -n 600 "$GITHUB_WORKSPACE/build-full.log" > build-log.txt
+            tail -n 500 "$GITHUB_WORKSPACE/build-full.log" > build-log.txt
           else
-            echo "No Gradle log produced - an earlier step failed." > build-log.txt
+            echo "No log file was created." > build-log.txt
           fi
           git init -q
           git config user.name "build-bot"

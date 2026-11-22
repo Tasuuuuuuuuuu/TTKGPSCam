@@ -2,7 +2,11 @@ name: Build APK from zip
 
 on:
   push:
+    branches: [ main ]
   workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -13,7 +17,7 @@ jobs:
       - name: Unzip project
         run: |
           unzip -q TTKGPSCam-source.zip
-          chmod +x TTKGPSCam/gradlew
+          ls -la TTKGPSCam
 
       - uses: actions/setup-java@v4
         with:
@@ -23,16 +27,21 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Set up Gradle
+      - name: Install SDK platform and build tools
+        run: |
+          yes | sdkmanager --licenses > /dev/null || true
+          sdkmanager "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Set up Gradle 8.9
         uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.9"
 
-      - name: Unit tests
+      - name: Unit tests and debug APK
         working-directory: TTKGPSCam
-        run: ./gradlew --no-daemon testDebugUnitTest
-
-      - name: Build debug APK
-        working-directory: TTKGPSCam
-        run: ./gradlew --no-daemon assembleDebug
+        run: |
+          set -o pipefail
+          gradle --no-daemon --stacktrace testDebugUnitTest assembleDebug 2>&1 | tee ../build-full.log
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
@@ -40,3 +49,20 @@ jobs:
           name: TTK-GPS-Cam-debug-apk
           path: TTKGPSCam/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
+
+      - name: Publish build log to build-logs branch
+        if: always()
+        run: |
+          mkdir -p /tmp/logs && cd /tmp/logs
+          if [ -f "$GITHUB_WORKSPACE/build-full.log" ]; then
+            tail -n 600 "$GITHUB_WORKSPACE/build-full.log" > build-log.txt
+          else
+            echo "No Gradle log produced - an earlier step failed." > build-log.txt
+          fi
+          git init -q
+          git config user.name "build-bot"
+          git config user.email "build-bot@users.noreply.github.com"
+          git checkout -q -b build-logs
+          git add build-log.txt
+          git commit -q -m "Build log for run ${{ github.run_id }}"
+          git push -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" build-logs
